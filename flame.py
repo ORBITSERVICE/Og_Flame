@@ -42,9 +42,19 @@ def display_banner():
     print(Fore.RED + pyfiglet.figlet_format("Og_Flame"))
     print(Fore.GREEN + "Made by @Og_Flame\n")
 
+def is_internet_available():
+    try:
+        socket.create_connection(("8.8.8.8", 53), timeout=5)
+        return True
+    except (OSError, socket.error):
+        return False
+
+# Option 1: Forward messages to all groups
 async def forward_messages_to_groups(client, last_message, session_name, rounds, delay_between_rounds):
     for round_num in range(1, rounds + 1):
         print(Fore.YELLOW + f"\nStarting round {round_num} for session {session_name}...")
+        group_count = 0
+
         async for dialog in client.iter_dialogs():
             if dialog.is_group:
                 group = dialog.entity
@@ -60,11 +70,18 @@ async def forward_messages_to_groups(client, last_message, session_name, rounds,
                 except Exception as e:
                     print(Fore.RED + f"Failed to forward message to {group.title}: {str(e)}")
                     logging.error(f"Failed to forward message to {group.title}: {str(e)}")
-                await asyncio.sleep(random.randint(15, 30))
+
+                group_count += 1
+                delay = random.randint(15, 30)
+                print(f"Waiting for {delay} seconds before forwarding to the next group...")
+                await asyncio.sleep(delay)
+
+        print(Fore.GREEN + f"Round {round_num} completed for session {session_name}.")
         if round_num < rounds:
             print(Fore.CYAN + f"Waiting for {delay_between_rounds} seconds before starting the next round...")
             await asyncio.sleep(delay_between_rounds)
 
+# Option 2: Send message and remove groups
 async def send_and_remove_groups(client, last_message, session_name):
     async for dialog in client.iter_dialogs():
         if dialog.is_group:
@@ -82,53 +99,70 @@ async def send_and_remove_groups(client, last_message, session_name):
             finally:
                 await asyncio.sleep(random.randint(10, 20))
 
-async def login_and_execute(api_id, api_hash, phone_number, session_name, option):
-    try:
-        client = TelegramClient(session_name, api_id, api_hash)
-        await client.start(phone=phone_number)
+# Detect banned accounts and login
+async def login_and_execute(api_id, api_hash, phone_number, session_name, option, active_sessions):
+    while True:
+        try:
+            client = TelegramClient(session_name, api_id, api_hash)
+            await client.start(phone=phone_number)
 
-        if not await client.is_user_authorized():
-            try:
-                await client.send_code_request(phone_number)
-                await client.sign_in(phone=phone_number)
-            except SessionPasswordNeededError:
-                password = input("Two-factor authentication enabled. Enter your password: ")
-                await client.sign_in(password=password)
+            if not await client.is_user_authorized():
+                try:
+                    await client.send_code_request(phone_number)
+                    await client.sign_in(phone_number)
+                except SessionPasswordNeededError:
+                    password = input("Two-factor authentication enabled. Enter your password: ")
+                    await client.sign_in(password=password)
 
-        saved_messages_peer = await client.get_input_entity('me')
-        history = await client(GetHistoryRequest(
-            peer=saved_messages_peer,
-            limit=1,
-            offset_id=0,
-            offset_date=None,
-            add_offset=0,
-            max_id=0,
-            min_id=0,
-            hash=0
-        ))
+            saved_messages_peer = await client.get_input_entity('me')
+            history = await client(GetHistoryRequest(
+                peer=saved_messages_peer,
+                limit=1,
+                offset_id=0,
+                offset_date=None,
+                add_offset=0,
+                max_id=0,
+                min_id=0,
+                hash=0
+            ))
 
-        if not history.messages:
-            print("No messages found in 'Saved Messages'")
-            logging.warning(f"No messages found in 'Saved Messages' for session {session_name}")
-            return
+            if not history.messages:
+                print("No messages found in 'Saved Messages'")
+                logging.warning(f"No messages found in 'Saved Messages' for session {session_name}")
+                return
 
-        last_message = history.messages[0]
+            last_message = history.messages[0]
 
-        if option == 1:
-            rounds = int(input(f"How many times do you want to forward messages for {session_name}? "))
-            delay_between_rounds = int(input(f"Enter delay (in seconds) between rounds for {session_name}: "))
-            await forward_messages_to_groups(client, last_message, session_name, rounds, delay_between_rounds)
-        elif option == 2:
-            await send_and_remove_groups(client, last_message, session_name)
+            if option == 1:
+                rounds = int(input(f"How many times do you want to forward messages for {session_name}? "))
+                delay_between_rounds = int(input(f"Enter delay (in seconds) between rounds for {session_name}: "))
+                await forward_messages_to_groups(client, last_message, session_name, rounds, delay_between_rounds)
+            elif option == 2:
+                await send_and_remove_groups(client, last_message, session_name)
 
-    except UserDeactivatedBanError:
-        print(Fore.RED + f"Account {session_name} is banned. Skipping this session.")
-        logging.error(f"Account {session_name} is banned.")
-    except Exception as e:
-        print(Fore.RED + f"Unexpected error in session {session_name}: {str(e)}")
-        logging.error(f"Unexpected error in session {session_name}: {str(e)}")
-    finally:
-        await client.disconnect()
+            break
+
+        except UserDeactivatedBanError:
+            print(Fore.RED + f"Account {session_name} is banned. Skipping this session.")
+            logging.error(f"Account {session_name} is banned.")
+            # Handle the shift of sessions here
+            await shift_sessions(active_sessions)
+            break
+        except Exception as e:
+            print(Fore.RED + f"Unexpected error in session {session_name}: {str(e)}")
+            logging.error(f"Unexpected error in session {session_name}: {str(e)}")
+        finally:
+            await client.disconnect()
+
+# Function to shift sessions when one gets banned
+async def shift_sessions(active_sessions):
+    if len(active_sessions) > 1:
+        print(Fore.YELLOW + "Shifting sessions due to ban...")
+        # Move each session to the previous position
+        for i in range(1, len(active_sessions)):
+            active_sessions[i - 1] = active_sessions[i]
+        active_sessions.pop()  # Remove the last session as it has shifted out
+        print(Fore.GREEN + f"Session shift complete. Remaining sessions: {len(active_sessions)}")
 
 async def main():
     display_banner()
@@ -138,17 +172,20 @@ async def main():
 
         for i in range(1, num_sessions + 1):
             session_name = f'session{i}'
-            print(f"\nEnter details for account {i}:")
-            api_id = int(input(f"Enter API ID for session {i}: "))
-            api_hash = input(f"Enter API hash for session {i}: ")
-            phone_number = input(f"Enter phone number for session {i} (with country code): ")
+            credentials = load_credentials(session_name)
 
-            credentials = {'api_id': api_id, 'api_hash': api_hash, 'phone_number': phone_number}
-            save_credentials(session_name, credentials)
+            if credentials:
+                print(f"\nUsing saved credentials for session {i}.")
+                active_sessions.append((credentials['api_id'], credentials['api_hash'], credentials['phone_number'], session_name))
+            else:
+                print(f"\nEnter details for account {i}:")
+                api_id = int(input(f"Enter API ID for session {i}: "))
+                api_hash = input(f"Enter API hash for session {i}: ")
+                phone_number = input(f"Enter phone number for session {i} (with country code): ")
 
-            print(f"\nLogging in to session {i}...")
-            await login_and_execute(api_id, api_hash, phone_number, session_name, None)
-            active_sessions.append((api_id, api_hash, phone_number, session_name))
+                credentials = {'api_id': api_id, 'api_hash': api_hash, 'phone_number': phone_number}
+                save_credentials(session_name, credentials)
+                active_sessions.append((api_id, api_hash, phone_number, session_name))
 
         for session in active_sessions:
             api_id, api_hash, phone_number, session_name = session
@@ -156,7 +193,7 @@ async def main():
             print("1. Forward last saved message to all groups (with rounds and delays)")
             print("2. Send last saved message to groups and remove failed ones")
             option = int(input("Enter your choice: "))
-            await login_and_execute(api_id, api_hash, phone_number, session_name, option)
+            await login_and_execute(api_id, api_hash, phone_number, session_name, option, active_sessions)
 
     except ValueError:
         print(Fore.RED + "Invalid input. Please enter a valid number.")
