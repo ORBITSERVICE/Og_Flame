@@ -90,7 +90,7 @@ async def login_and_execute(api_id, api_hash, phone_number, session_name, option
         if not await client.is_user_authorized():
             try:
                 await client.send_code_request(phone_number)
-                await client.sign_in(phone_number)
+                await client.sign_in(phone=phone_number)
             except SessionPasswordNeededError:
                 password = input("Two-factor authentication enabled. Enter your password: ")
                 await client.sign_in(password=password)
@@ -134,6 +134,7 @@ async def main():
     display_banner()
     try:
         num_sessions = int(input("Enter how many sessions you want to log in: "))
+        active_sessions = []
 
         for i in range(1, num_sessions + 1):
             session_name = f'session{i}'
@@ -145,6 +146,12 @@ async def main():
             credentials = {'api_id': api_id, 'api_hash': api_hash, 'phone_number': phone_number}
             save_credentials(session_name, credentials)
 
+            print(f"\nLogging in to session {i}...")
+            await login_and_execute(api_id, api_hash, phone_number, session_name, None)
+            active_sessions.append((api_id, api_hash, phone_number, session_name))
+
+        for session in active_sessions:
+            api_id, api_hash, phone_number, session_name = session
             print(f"\nOptions for {session_name}:")
             print("1. Forward last saved message to all groups (with rounds and delays)")
             print("2. Send last saved message to groups and remove failed ones")
